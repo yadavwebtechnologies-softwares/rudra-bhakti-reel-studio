@@ -24,6 +24,7 @@ import {
   generateSceneImage,
   fileToDataUrl,
 } from "./api.js";
+import { exportSilentReel } from "./videoExport.js";
 
 const styles = ["Devotional", "Serene", "Energetic", "Minimal"];
 const durations = ["15 Sec", "30 Sec", "60 Sec"];
@@ -56,6 +57,8 @@ export default function App() {
   const [progress, setProgress] = useState("");
   const [backendStatus, setBackendStatus] = useState("checking");
   const [error, setError] = useState("");
+  const [exportBusy, setExportBusy] = useState(false);
+const [exportProgress, setExportProgress] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -227,6 +230,44 @@ export default function App() {
     link.click();
     link.remove();
   }
+  async function handleExportMP4() {
+  if (busy || exportBusy || generatedImages.length === 0) return;
+
+  setExportBusy(true);
+  setExportProgress("Preparing your Reel...");
+  setError("");
+
+  try {
+    const videoBlob = await exportSilentReel({
+      scenes: generatedImages,
+      duration,
+      onProgress: (message) => {
+        setExportProgress(message);
+      },
+    });
+
+    const videoUrl = URL.createObjectURL(videoBlob);
+    const link = document.createElement("a");
+
+    link.href = videoUrl;
+    link.download = `rudra-bhakti-${duration
+      .toLowerCase()
+      .replace(" ", "-")}.mp4`;
+
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    setExportProgress("Your MP4 is ready and downloading!");
+
+    setTimeout(() => URL.revokeObjectURL(videoUrl), 60000);
+  } catch (err) {
+    setError(err.message || "MP4 export failed. Please try again.");
+    setExportProgress("");
+  } finally {
+    setExportBusy(false);
+  }
+}
 
   const navItems = [
     { name: "Studio", icon: Sparkles },
@@ -582,11 +623,42 @@ export default function App() {
                   Auto Draft
                 </button>
               </div>
+              <button
+  className="primary-button"
+  style={{ width: "100%", marginTop: 14 }}
+  onClick={handleExportMP4}
+  disabled={
+    busy ||
+    exportBusy ||
+    generatedImages.length === 0
+  }
+>
+  {exportBusy ? (
+    <LoaderCircle size={17} />
+  ) : (
+    <Download size={17} />
+  )}
+  {exportBusy ? "Exporting MP4..." : "Export MP4"}
+</button>
+
+{exportProgress && (
+  <p
+    style={{
+      fontSize: 12,
+      color: "#777780",
+      lineHeight: 1.5,
+      marginTop: 10,
+      textAlign: "center",
+    }}
+  >
+    {exportProgress}
+  </p>
+)}
 
               <button
                 className="reset-button"
                 onClick={resetStudio}
-                disabled={busy}
+                disabled={busy || exportBusy}
               >
                 <RotateCcw size={15} />
                 Reset Settings
