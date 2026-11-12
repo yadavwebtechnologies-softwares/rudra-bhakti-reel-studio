@@ -383,7 +383,8 @@ export async function exportSilentReel({
           `unsharp=5:5:0.25:3:3:0.0,` +
           `setsar=1,` +
           `format=yuv420p,` +
-          `settb=AVTB[v${i}]`
+          `settb=AVTB,` +
+`fps=${FPS}[v${i}]`
       );
     }
 
