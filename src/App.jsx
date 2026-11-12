@@ -34,6 +34,8 @@ function getSceneCount(duration) {
   if (duration === "60 Sec") return 8;
   return 5;
 }
+
+// Persistent reference image storage
 const REFERENCE_DB_NAME = "rudra-bhakti-reference-storage";
 const REFERENCE_STORE_NAME = "active-references";
 const REFERENCE_DB_VERSION = 1;
@@ -62,20 +64,33 @@ function openReferenceDatabase() {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+
+      db.onversionchange = () => {
+        db.close();
+      };
+
+      resolve(db);
+    };
 
     request.onerror = () => {
       reject(
-        request.error || new Error("Could not open reference storage.")
+        request.error ||
+          new Error("Could not open reference storage.")
       );
     };
   });
 }
 
 function queueReferenceWrite(operation) {
-  const result = referenceWriteQueue.then(operation, operation);
+  const result = referenceWriteQueue.then(
+    operation,
+    operation
+  );
 
   referenceWriteQueue = result.catch(() => {});
+
   return result;
 }
 
@@ -93,16 +108,21 @@ async function loadSavedReferences() {
         .objectStore(REFERENCE_STORE_NAME)
         .getAll();
 
-      request.onsuccess = () => resolve(request.result || []);
+      request.onsuccess = () => {
+        resolve(request.result || []);
+      };
 
       request.onerror = () => {
         reject(
-          request.error || new Error("Could not read saved references.")
+          request.error ||
+            new Error("Could not read saved references.")
         );
       };
 
       transaction.onabort = () => {
-        reject(new Error("Reference loading was interrupted."));
+        reject(
+          new Error("Reference loading was interrupted.")
+        );
       };
     });
 
@@ -161,12 +181,15 @@ function saveReferenceToStorage(index, file) {
 
         transaction.onerror = () => {
           reject(
-            transaction.error || new Error("Reference could not be saved.")
+            transaction.error ||
+              new Error("Reference could not be saved.")
           );
         };
 
         transaction.onabort = () => {
-          reject(new Error("Reference saving was interrupted."));
+          reject(
+            new Error("Reference saving was interrupted.")
+          );
         };
       });
     } finally {
@@ -192,12 +215,15 @@ function deleteReferenceFromStorage(index) {
 
         transaction.onerror = () => {
           reject(
-            transaction.error || new Error("Reference could not be removed.")
+            transaction.error ||
+              new Error("Reference could not be removed.")
           );
         };
 
         transaction.onabort = () => {
-          reject(new Error("Reference removal was interrupted."));
+          reject(
+            new Error("Reference removal was interrupted.")
+          );
         };
       });
     } finally {
@@ -223,12 +249,15 @@ function clearSavedReferences() {
 
         transaction.onerror = () => {
           reject(
-            transaction.error || new Error("References could not be cleared.")
+            transaction.error ||
+              new Error("References could not be cleared.")
           );
         };
 
         transaction.onabort = () => {
-          reject(new Error("Reference reset was interrupted."));
+          reject(
+            new Error("Reference reset was interrupted.")
+          );
         };
       });
     } finally {
@@ -249,39 +278,48 @@ export default function App() {
     null,
     null,
   ]);
+
   const [referencesReady, setReferencesReady] = useState(false);
 
-const [referenceStorageStatus, setReferenceStorageStatus] =
-  useState("loading");
+  const [referenceStorageStatus, setReferenceStorageStatus] =
+    useState("loading");
 
-const referenceSaveSequence = useRef(0);
+  const referenceSaveSequence = useRef(0);
 
   const [storyboard, setStoryboard] = useState(null);
   const [generatedImages, setGeneratedImages] = useState([]);
   const [selectedScene, setSelectedScene] = useState(0);
 
-  const [status, setStatus] = useState("Checking backend connection...");
+  const [status, setStatus] = useState(
+    "Checking backend connection..."
+  );
+
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
   const [backendStatus, setBackendStatus] = useState("checking");
   const [error, setError] = useState("");
   const [exportBusy, setExportBusy] = useState(false);
-const [exportProgress, setExportProgress] = useState("");
+  const [exportProgress, setExportProgress] = useState("");
 
+  // Check backend connection
   useEffect(() => {
     let active = true;
 
     checkBackend()
       .then(() => {
         if (!active) return;
+
         setBackendStatus("online");
         setStatus("Ready to create");
       })
       .catch((err) => {
         if (!active) return;
+
         setBackendStatus("offline");
         setStatus("Backend connection unavailable");
-        setError(err.message || "Could not connect to the AI backend.");
+        setError(
+          err.message || "Could not connect to the AI backend."
+        );
       });
 
     return () => {
@@ -289,7 +327,8 @@ const [exportProgress, setExportProgress] = useState("");
     };
   }, []);
 
-    useEffect(() => {
+  // Restore saved reference images
+  useEffect(() => {
     let active = true;
 
     loadSavedReferences()
@@ -305,7 +344,11 @@ const [exportProgress, setExportProgress] = useState("");
       .catch((err) => {
         if (!active) return;
 
-        console.warn("Reference restore unavailable:", err);
+        console.warn(
+          "Reference restore unavailable:",
+          err
+        );
+
         setReferenceStorageStatus("unavailable");
       })
       .finally(() => {
@@ -319,60 +362,90 @@ const [exportProgress, setExportProgress] = useState("");
     };
   }, []);
 
-function handleReference(index, file) {
-  const nextReferences = [...references];
-  nextReferences[index] = file || null;
+  // Save or replace a reference image
+  function handleReference(index, file) {
+    if (!Number.isInteger(index) || index < 0 || index > 3) {
+      return;
+    }
 
-  setReferences(nextReferences);
-  setError("");
+    const nextReferences = [...references];
+    nextReferences[index] = file || null;
 
-  const operationId = ++referenceSaveSequence.current;
+    setReferences(nextReferences);
+    setError("");
 
-  setReferenceStorageStatus("saving");
+    const operationId = ++referenceSaveSequence.current;
 
-  const operation = file
-    ? saveReferenceToStorage(index, file)
-    : deleteReferenceFromStorage(index);
+    setReferenceStorageStatus("saving");
 
-  operation
-    .then(() => {
-      if (operationId !== referenceSaveSequence.current) return;
+    const operation = file
+      ? saveReferenceToStorage(index, file)
+      : deleteReferenceFromStorage(index);
 
-      setReferenceStorageStatus(
-        nextReferences.some(Boolean) ? "saved" : "ready"
-      );
-    })
-    .catch((err) => {
-      console.warn("Reference storage failed:", err);
+    operation
+      .then(() => {
+        if (
+          operationId !== referenceSaveSequence.current
+        ) {
+          return;
+        }
 
-      if (operationId !== referenceSaveSequence.current) return;
+        setReferenceStorageStatus(
+          nextReferences.some(Boolean) ? "saved" : "ready"
+        );
+      })
+      .catch((err) => {
+        console.warn("Reference storage failed:", err);
 
-      setReferenceStorageStatus("unavailable");
-    });
-}
+        if (
+          operationId !== referenceSaveSequence.current
+        ) {
+          return;
+        }
 
+        setReferenceStorageStatus("unavailable");
+      });
+  }
+
+  // Reset studio and saved reference images
   function resetStudio() {
-    if (busy) return;
+    if (busy || exportBusy || !referencesReady) return;
 
     setStyle("Devotional");
     setDuration("30 Sec");
     setPrompt("");
     setReferences([null, null, null, null]);
-    const resetOperationId = ++referenceSaveSequence.current;
 
-setReferenceStorageStatus("saving");
+    const resetOperationId =
+      ++referenceSaveSequence.current;
 
-clearSavedReferences()
-  .then(() => {
-    if (resetOperationId !== referenceSaveSequence.current) return;
-    setReferenceStorageStatus("ready");
-  })
-  .catch((err) => {
-    console.warn("Could not clear saved references:", err);
+    setReferenceStorageStatus("saving");
 
-    if (resetOperationId !== referenceSaveSequence.current) return;
-    setReferenceStorageStatus("unavailable");
-  });
+    clearSavedReferences()
+      .then(() => {
+        if (
+          resetOperationId !== referenceSaveSequence.current
+        ) {
+          return;
+        }
+
+        setReferenceStorageStatus("ready");
+      })
+      .catch((err) => {
+        console.warn(
+          "Could not clear saved references:",
+          err
+        );
+
+        if (
+          resetOperationId !== referenceSaveSequence.current
+        ) {
+          return;
+        }
+
+        setReferenceStorageStatus("unavailable");
+      });
+
     setStoryboard(null);
     setGeneratedImages([]);
     setSelectedScene(0);
@@ -385,7 +458,9 @@ clearSavedReferences()
     const story = prompt.trim();
 
     if (story.length < 10) {
-      throw new Error("Please enter a story with at least 10 characters.");
+      throw new Error(
+        "Please enter a story with at least 10 characters."
+      );
     }
 
     const sceneCount = getSceneCount(duration);
@@ -407,8 +482,12 @@ clearSavedReferences()
     setGeneratedImages([]);
     setSelectedScene(0);
 
-    setStatus(`${result.scenes.length} scenes planned successfully`);
+    setStatus(
+      `${result.scenes.length} scenes planned successfully`
+    );
+
     setProgress(`${result.scenes.length} scenes ready`);
+
     return result;
   }
 
@@ -421,7 +500,10 @@ clearSavedReferences()
     try {
       await createStoryboard();
     } catch (err) {
-      setError(err.message || "Could not create the storyboard.");
+      setError(
+        err.message || "Could not create the storyboard."
+      );
+
       setStatus("Storyboard creation failed");
       setProgress("");
     } finally {
@@ -430,10 +512,12 @@ clearSavedReferences()
   }
 
   async function handleAutoEdit() {
-    if (busy) return;
+    if (busy || !referencesReady) return;
 
     if (backendStatus !== "online") {
-      setError("AI backend is not connected. Please check your Worker.");
+      setError(
+        "AI backend is not connected. Please check your Worker."
+      );
       return;
     }
 
@@ -447,12 +531,10 @@ clearSavedReferences()
       setStatus("Preparing reference images...");
       setProgress("Reading your active style references...");
 
-      const activeReferences = (
-        await Promise.all(
-          references
-            .filter(Boolean)
-            .map((file) => fileToDataUrl(file))
-        )
+      const activeReferences = await Promise.all(
+        references
+          .filter(Boolean)
+          .map((file) => fileToDataUrl(file))
       );
 
       const results = [];
@@ -460,7 +542,10 @@ clearSavedReferences()
       for (let i = 0; i < plan.scenes.length; i++) {
         const scene = plan.scenes[i];
 
-        setStatus(`Generating scene ${i + 1} of ${plan.scenes.length}...`);
+        setStatus(
+          `Generating scene ${i + 1} of ${plan.scenes.length}...`
+        );
+
         setProgress(
           `Creating image ${i + 1}/${plan.scenes.length}: ${scene.sceneTitle}`
         );
@@ -472,7 +557,9 @@ clearSavedReferences()
         });
 
         if (!result.imageDataUrl) {
-          throw new Error(`Image generation failed for scene ${i + 1}.`);
+          throw new Error(
+            `Image generation failed for scene ${i + 1}.`
+          );
         }
 
         results.push({
@@ -484,12 +571,20 @@ clearSavedReferences()
         setSelectedScene(0);
       }
 
-      setStatus("All scene images generated successfully!");
-      setProgress(`${results.length} of ${results.length} scenes completed`);
+      setStatus(
+        "All scene images generated successfully!"
+      );
+
+      setProgress(
+        `${results.length} of ${results.length} scenes completed`
+      );
     } catch (err) {
       setError(err.message || "Image generation failed.");
       setStatus("Generation stopped");
-      setProgress("Some scenes may have been generated successfully.");
+
+      setProgress(
+        "Some scenes may have been generated successfully."
+      );
     } finally {
       setBusy(false);
     }
@@ -499,50 +594,65 @@ clearSavedReferences()
     if (!scene?.imageDataUrl) return;
 
     const link = document.createElement("a");
+
     link.href = scene.imageDataUrl;
     link.download = `rudra-bhakti-scene-${index + 1}.png`;
+
     document.body.appendChild(link);
     link.click();
     link.remove();
   }
+
   async function handleExportMP4() {
-  if (busy || exportBusy || generatedImages.length === 0) return;
+    if (
+      busy ||
+      exportBusy ||
+      generatedImages.length === 0
+    ) {
+      return;
+    }
 
-  setExportBusy(true);
-  setExportProgress("Preparing your Reel...");
-  setError("");
+    setExportBusy(true);
+    setExportProgress("Preparing your Reel...");
+    setError("");
 
-  try {
-    const videoBlob = await exportSilentReel({
-      scenes: generatedImages,
-      duration,
-      onProgress: (message) => {
-        setExportProgress(message);
-      },
-    });
+    try {
+      const videoBlob = await exportSilentReel({
+        scenes: generatedImages,
+        duration,
+        onProgress: (message) => {
+          setExportProgress(message);
+        },
+      });
 
-    const videoUrl = URL.createObjectURL(videoBlob);
-    const link = document.createElement("a");
+      const videoUrl = URL.createObjectURL(videoBlob);
+      const link = document.createElement("a");
 
-    link.href = videoUrl;
-    link.download = `rudra-bhakti-${duration
-      .toLowerCase()
-      .replace(" ", "-")}.mp4`;
+      link.href = videoUrl;
 
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+      link.download = `rudra-bhakti-${duration
+        .toLowerCase()
+        .replace(" ", "-")}.mp4`;
 
-    setExportProgress("Your MP4 is ready and downloading!");
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
 
-    setTimeout(() => URL.revokeObjectURL(videoUrl), 60000);
-  } catch (err) {
-    setError(err.message || "MP4 export failed. Please try again.");
-    setExportProgress("");
-  } finally {
-    setExportBusy(false);
+      setExportProgress(
+        "Your MP4 is ready and downloading!"
+      );
+
+      setTimeout(() => URL.revokeObjectURL(videoUrl), 60000);
+    } catch (err) {
+      setError(
+        err.message || "MP4 export failed. Please try again."
+      );
+
+      setExportProgress("");
+    } finally {
+      setExportBusy(false);
+    }
   }
-}
 
   const navItems = [
     { name: "Studio", icon: Sparkles },
@@ -560,8 +670,10 @@ clearSavedReferences()
           <div className="brand-mark">
             <Sparkles size={19} />
           </div>
+
           <div>
             <div className="brand-name">Rudra Bhakti</div>
+
             <div className="brand-caption">
               REEL STUDIO · AUTO EDIT · AUTO DRAFT
             </div>
@@ -572,7 +684,9 @@ clearSavedReferences()
           {navItems.map(({ name, icon: Icon }) => (
             <button
               key={name}
-              className={`nav-link ${activeTab === name ? "active" : ""}`}
+              className={`nav-link ${
+                activeTab === name ? "active" : ""
+              }`}
               onClick={() => setActiveTab(name)}
             >
               <Icon size={16} />
@@ -585,14 +699,21 @@ clearSavedReferences()
       <main className="main-content" id="studio">
         <section className="page-heading">
           <div>
-            <div className="eyebrow">YOUR DEVOTIONAL CREATION SPACE</div>
+            <div className="eyebrow">
+              YOUR DEVOTIONAL CREATION SPACE
+            </div>
+
             <h1>Create your next Reel</h1>
+
             <p>
               Turn your story into beautiful, consistent devotional
               image scenes.
             </p>
           </div>
-          <div className="version-tag">BETA · VERSION 1.0</div>
+
+          <div className="version-tag">
+            BETA · VERSION 1.0
+          </div>
         </section>
 
         {activeTab === "Studio" ? (
@@ -601,6 +722,7 @@ clearSavedReferences()
               <div className="panel-heading">
                 <div>
                   <h2>Live Preview</h2>
+
                   <p>
                     {generatedImages.length > 0
                       ? `Scene ${selectedScene + 1} of ${generatedImages.length}`
@@ -637,12 +759,15 @@ clearSavedReferences()
                           <ImageIcon size={30} />
                         )}
                       </div>
+
                       <h3>Your divine creation</h3>
+
                       <p>
                         {busy
                           ? "Your scene is being created..."
                           : "Your generated devotional images will appear here."}
                       </p>
+
                       <span>9:16 VERTICAL FORMAT</span>
                     </div>
                   )}
@@ -665,6 +790,7 @@ clearSavedReferences()
                   <Clock3 size={15} />
                   {duration}
                 </div>
+
                 <div>
                   <Music2 size={15} />
                   Silent export · Add Facebook music later
@@ -673,14 +799,20 @@ clearSavedReferences()
 
               {generatedImages.length > 0 && (
                 <div style={{ marginTop: 20 }}>
-                  <h3 style={{ fontSize: 14, marginBottom: 12 }}>
+                  <h3
+                    style={{
+                      fontSize: 14,
+                      marginBottom: 12,
+                    }}
+                  >
                     Generated Scenes
                   </h3>
 
                   <div
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "repeat(auto-fill, minmax(76px, 1fr))",
+                      gridTemplateColumns:
+                        "repeat(auto-fill, minmax(76px, 1fr))",
                       gap: 10,
                     }}
                   >
@@ -711,6 +843,7 @@ clearSavedReferences()
                             display: "block",
                           }}
                         />
+
                         <span style={{ fontSize: 11 }}>
                           Scene {index + 1}
                         </span>
@@ -723,13 +856,23 @@ clearSavedReferences()
                       <h3 style={{ fontSize: 14 }}>
                         {currentScene.sceneTitle}
                       </h3>
-                      <p style={{ fontSize: 13, lineHeight: 1.5 }}>
+
+                      <p
+                        style={{
+                          fontSize: 13,
+                          lineHeight: 1.5,
+                        }}
+                      >
                         {currentScene.sceneDescription}
                       </p>
+
                       <button
                         className="secondary-button"
                         onClick={() =>
-                          downloadScene(currentScene, selectedScene)
+                          downloadScene(
+                            currentScene,
+                            selectedScene
+                          )
                         }
                         style={{ marginTop: 10 }}
                       >
@@ -743,9 +886,18 @@ clearSavedReferences()
 
               {storyboard && (
                 <div style={{ marginTop: 20 }}>
-                  <h3 style={{ fontSize: 14 }}>Story: {storyboard.title}</h3>
-                  <p style={{ fontSize: 12, lineHeight: 1.5 }}>
-                    Character identity is shared across the planned scenes.
+                  <h3 style={{ fontSize: 14 }}>
+                    Story: {storyboard.title}
+                  </h3>
+
+                  <p
+                    style={{
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    Character identity is shared across the
+                    planned scenes.
                   </p>
                 </div>
               )}
@@ -757,11 +909,13 @@ clearSavedReferences()
                   <h2>Reel Settings</h2>
                   <p>Turn your story into visual scenes</p>
                 </div>
+
                 <WandSparkles size={20} />
               </div>
 
               <div className="control-group">
                 <label>VISUAL MOOD</label>
+
                 <div className="chip-row">
                   {styles.map((item) => (
                     <button
@@ -780,6 +934,7 @@ clearSavedReferences()
 
               <div className="control-group">
                 <label>REEL DURATION</label>
+
                 <div className="chip-row">
                   {durations.map((item) => (
                     <button
@@ -794,23 +949,29 @@ clearSavedReferences()
                     </button>
                   ))}
                 </div>
+
                 <p className="field-help">
-                  {getSceneCount(duration)} visual scenes will be planned.
+                  {getSceneCount(duration)} visual scenes will be
+                  planned.
                 </p>
               </div>
 
               <div className="control-group">
                 <label>YOUR STORY / CREATIVE PROMPT</label>
+
                 <textarea
                   value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
+                  onChange={(event) =>
+                    setPrompt(event.target.value)
+                  }
                   placeholder="Apni Hindi kahani yahan likhein... Example: Bhagwan Shiva aur Mata Parvati Kailash par ek divya pal saath bita rahe hain..."
                   rows={6}
                   disabled={busy}
                 />
+
                 <p className="field-help">
-                  AI will divide your story into different moments. No
-                  narration or voiceover will be generated.
+                  AI will divide your story into different moments.
+                  No narration or voiceover will be generated.
                 </p>
               </div>
 
@@ -819,45 +980,66 @@ clearSavedReferences()
                   <label>STYLE REFERENCE IMAGES</label>
                   <span>4 SLOTS</span>
                 </div>
+
                 <p className="field-help">
-                  Upload or replace references anytime. Active references
-                  guide the visual style, lighting, colours and quality
-                  of new images.
+                  Upload or replace references anytime. Active
+                  references guide the visual style, lighting,
+                  colours and quality of new images.
                 </p>
 
-                <p className="field-help">
-  ...
-</p>
+                <p
+                  className="field-help"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {!referencesReady
+                    ? "Restoring saved references..."
+                    : referenceStorageStatus === "saving"
+                      ? "Saving reference changes..."
+                      : referenceStorageStatus === "saved"
+                        ? "References auto-saved in this browser. They will return after refresh."
+                        : referenceStorageStatus === "unavailable"
+                          ? "Browser storage unavailable. References remain active for this session."
+                          : "No saved references yet. New uploads will be saved automatically."}
+                </p>
 
-<div className="reference-grid">
-  {references.map((file, index) => (
-    <label className="reference-slot" key={index}>
-      {file ? (
-        <img
-          src={URL.createObjectURL(file)}
-          alt={`Reference ${index + 1}`}
-        />
-      ) : (
-        <>
-          <ImagePlus size={21} />
-          <span>Reference {index + 1}</span>
-        </>
-      )}
-      <input
-        type="file"
-        accept="image/png,image/jpeg,image/webp"
-        disabled={busy || !referencesReady}
-        onChange={(event) => {
-          handleReference(
-            index,
-            event.target.files?.[0]
-          );
-          event.target.value = "";
-        }}
-      />
-    </label>
-  ))}
-</div>
+                <div className="reference-grid">
+                  {references.map((file, index) => (
+                    <label
+                      className="reference-slot"
+                      key={index}
+                    >
+                      {file ? (
+                        <img
+                          src={URL.createObjectURL(file)}
+                          alt={`Reference ${index + 1}`}
+                        />
+                      ) : (
+                        <>
+                          <ImagePlus size={21} />
+                          <span>
+                            Reference {index + 1}
+                          </span>
+                        </>
+                      )}
+
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        disabled={busy || !referencesReady}
+                        onChange={(event) => {
+                          handleReference(
+                            index,
+                            event.target.files?.[0]
+                          );
+
+                          event.target.value = "";
+                        }}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
 
               {error && (
                 <div
@@ -879,77 +1061,93 @@ clearSavedReferences()
               )}
 
               <div className="action-buttons">
-  <button
-    className="primary-button"
-    disabled={
-      busy ||
-      backendStatus !== "online" ||
-      !referencesReady
-    }
-    onClick={handleAutoEdit}
-  >
-    {busy ? (
-      <LoaderCircle size={17} />
-    ) : (
-      <Sparkles size={17} />
-    )}
-    {busy ? "Creating..." : "Auto Edit"}
-  </button>
+                <button
+                  className="primary-button"
+                  disabled={
+                    busy ||
+                    backendStatus !== "online" ||
+                    !referencesReady
+                  }
+                  onClick={handleAutoEdit}
+                >
+                  {busy ? (
+                    <LoaderCircle size={17} />
+                  ) : (
+                    <Sparkles size={17} />
+                  )}
 
-  <button
-    className="secondary-button"
-    disabled={busy || backendStatus !== "online"}
-    onClick={handleAutoDraft}
-  >
-    <Film size={17} />
-    Auto Draft
-  </button>
-</div>
-              <button
-  className="primary-button"
-  style={{ width: "100%", marginTop: 14 }}
-  onClick={handleExportMP4}
-  disabled={
-    busy ||
-    exportBusy ||
-    generatedImages.length === 0
-  }
->
-  {exportBusy ? (
-    <LoaderCircle size={17} />
-  ) : (
-    <Download size={17} />
-  )}
-  {exportBusy ? "Exporting MP4..." : "Export MP4"}
-</button>
+                  {busy ? "Creating..." : "Auto Edit"}
+                </button>
 
-{exportProgress && (
-  <p
-    style={{
-      fontSize: 12,
-      color: "#777780",
-      lineHeight: 1.5,
-      marginTop: 10,
-      textAlign: "center",
-    }}
-  >
-    {exportProgress}
-  </p>
-)}
+                <button
+                  className="secondary-button"
+                  disabled={
+                    busy || backendStatus !== "online"
+                  }
+                  onClick={handleAutoDraft}
+                >
+                  <Film size={17} />
+                  Auto Draft
+                </button>
+              </div>
 
               <button
-  className="reset-button"
-  onClick={resetStudio}
-  disabled={busy || exportBusy || !referencesReady}
->
-  <RotateCcw size={15} />
-  Reset Settings
-</button>
+                className="primary-button"
+                style={{
+                  width: "100%",
+                  marginTop: 14,
+                }}
+                onClick={handleExportMP4}
+                disabled={
+                  busy ||
+                  exportBusy ||
+                  generatedImages.length === 0
+                }
+              >
+                {exportBusy ? (
+                  <LoaderCircle size={17} />
+                ) : (
+                  <Download size={17} />
+                )}
+
+                {exportBusy
+                  ? "Exporting MP4..."
+                  : "Export MP4"}
+              </button>
+
+              {exportProgress && (
+                <p
+                  style={{
+                    fontSize: 12,
+                    color: "#777780",
+                    lineHeight: 1.5,
+                    marginTop: 10,
+                    textAlign: "center",
+                  }}
+                >
+                  {exportProgress}
+                </p>
+              )}
+
+              <button
+                className="reset-button"
+                onClick={resetStudio}
+                disabled={
+                  busy ||
+                  exportBusy ||
+                  !referencesReady
+                }
+              >
+                <RotateCcw size={15} />
+                Reset Settings
+              </button>
 
               {storyboard && (
                 <div style={{ marginTop: 18, fontSize: 12 }}>
                   <CheckCircle2 size={15} />
-                  {" "}Storyboard available · {storyboard.scenes.length} scenes
+                  {" "}
+                  Storyboard available ·{" "}
+                  {storyboard.scenes.length} scenes
                 </div>
               )}
             </section>
@@ -957,10 +1155,12 @@ clearSavedReferences()
         ) : (
           <section className="panel empty-section">
             <FolderOpen size={32} />
+
             <h2>{activeTab}</h2>
+
             <p>
-              This section will be connected during the next development
-              steps.
+              This section will be connected during the next
+              development steps.
             </p>
           </section>
         )}
@@ -971,6 +1171,7 @@ clearSavedReferences()
           <strong>Rudra Bhakti</strong>
           <span> · Reel Studio</span>
         </div>
+
         <div>
           IMAGE-BASED DEVOTIONAL REELS · SILENT MP4 EXPORT
         </div>
