@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import {
   ImagePlus,
   Sparkles,
@@ -34,6 +34,208 @@ function getSceneCount(duration) {
   if (duration === "60 Sec") return 8;
   return 5;
 }
+const REFERENCE_DB_NAME = "rudra-bhakti-reference-storage";
+const REFERENCE_STORE_NAME = "active-references";
+const REFERENCE_DB_VERSION = 1;
+
+let referenceWriteQueue = Promise.resolve();
+
+function openReferenceDatabase() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("Browser storage is unavailable."));
+      return;
+    }
+
+    const request = indexedDB.open(
+      REFERENCE_DB_NAME,
+      REFERENCE_DB_VERSION
+    );
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+
+      if (!db.objectStoreNames.contains(REFERENCE_STORE_NAME)) {
+        db.createObjectStore(REFERENCE_STORE_NAME, {
+          keyPath: "slot",
+        });
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+
+    request.onerror = () => {
+      reject(
+        request.error || new Error("Could not open reference storage.")
+      );
+    };
+  });
+}
+
+function queueReferenceWrite(operation) {
+  const result = referenceWriteQueue.then(operation, operation);
+
+  referenceWriteQueue = result.catch(() => {});
+  return result;
+}
+
+async function loadSavedReferences() {
+  const db = await openReferenceDatabase();
+
+  try {
+    const records = await new Promise((resolve, reject) => {
+      const transaction = db.transaction(
+        REFERENCE_STORE_NAME,
+        "readonly"
+      );
+
+      const request = transaction
+        .objectStore(REFERENCE_STORE_NAME)
+        .getAll();
+
+      request.onsuccess = () => resolve(request.result || []);
+
+      request.onerror = () => {
+        reject(
+          request.error || new Error("Could not read saved references.")
+        );
+      };
+
+      transaction.onabort = () => {
+        reject(new Error("Reference loading was interrupted."));
+      };
+    });
+
+    const slots = [null, null, null, null];
+
+    records.forEach((record) => {
+      const index = Number(record.slot);
+      const blob = record.fileData;
+
+      if (
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index > 3 ||
+        !blob ||
+        typeof blob.arrayBuffer !== "function"
+      ) {
+        return;
+      }
+
+      slots[index] = new File(
+        [blob],
+        record.fileName || `reference-${index + 1}`,
+        {
+          type: record.fileType || blob.type || "image/png",
+          lastModified: record.lastModified || Date.now(),
+        }
+      );
+    });
+
+    return slots;
+  } finally {
+    db.close();
+  }
+}
+
+function saveReferenceToStorage(index, file) {
+  return queueReferenceWrite(async () => {
+    const db = await openReferenceDatabase();
+
+    try {
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction(
+          REFERENCE_STORE_NAME,
+          "readwrite"
+        );
+
+        transaction.objectStore(REFERENCE_STORE_NAME).put({
+          slot: index,
+          fileData: file,
+          fileName: file.name,
+          fileType: file.type,
+          lastModified: file.lastModified,
+        });
+
+        transaction.oncomplete = resolve;
+
+        transaction.onerror = () => {
+          reject(
+            transaction.error || new Error("Reference could not be saved.")
+          );
+        };
+
+        transaction.onabort = () => {
+          reject(new Error("Reference saving was interrupted."));
+        };
+      });
+    } finally {
+      db.close();
+    }
+  });
+}
+
+function deleteReferenceFromStorage(index) {
+  return queueReferenceWrite(async () => {
+    const db = await openReferenceDatabase();
+
+    try {
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction(
+          REFERENCE_STORE_NAME,
+          "readwrite"
+        );
+
+        transaction.objectStore(REFERENCE_STORE_NAME).delete(index);
+
+        transaction.oncomplete = resolve;
+
+        transaction.onerror = () => {
+          reject(
+            transaction.error || new Error("Reference could not be removed.")
+          );
+        };
+
+        transaction.onabort = () => {
+          reject(new Error("Reference removal was interrupted."));
+        };
+      });
+    } finally {
+      db.close();
+    }
+  });
+}
+
+function clearSavedReferences() {
+  return queueReferenceWrite(async () => {
+    const db = await openReferenceDatabase();
+
+    try {
+      await new Promise((resolve, reject) => {
+        const transaction = db.transaction(
+          REFERENCE_STORE_NAME,
+          "readwrite"
+        );
+
+        transaction.objectStore(REFERENCE_STORE_NAME).clear();
+
+        transaction.oncomplete = resolve;
+
+        transaction.onerror = () => {
+          reject(
+            transaction.error || new Error("References could not be cleared.")
+          );
+        };
+
+        transaction.onabort = () => {
+          reject(new Error("Reference reset was interrupted."));
+        };
+      });
+    } finally {
+      db.close();
+    }
+  });
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("Studio");
@@ -47,6 +249,12 @@ export default function App() {
     null,
     null,
   ]);
+  const [referencesReady, setReferencesReady] = useState(false);
+
+const [referenceStorageStatus, setReferenceStorageStatus] =
+  useState("loading");
+
+const referenceSaveSequence = useRef(0);
 
   const [storyboard, setStoryboard] = useState(null);
   const [generatedImages, setGeneratedImages] = useState([]);
@@ -81,15 +289,67 @@ const [exportProgress, setExportProgress] = useState("");
     };
   }, []);
 
-  function handleReference(index, file) {
-    if (!file) return;
+    useEffect(() => {
+    let active = true;
 
-    setReferences((current) =>
-      current.map((item, i) => (i === index ? file : item))
-    );
+    loadSavedReferences()
+      .then((savedReferences) => {
+        if (!active) return;
 
-    setError("");
-  }
+        setReferences(savedReferences);
+
+        setReferenceStorageStatus(
+          savedReferences.some(Boolean) ? "saved" : "ready"
+        );
+      })
+      .catch((err) => {
+        if (!active) return;
+
+        console.warn("Reference restore unavailable:", err);
+        setReferenceStorageStatus("unavailable");
+      })
+      .finally(() => {
+        if (active) {
+          setReferencesReady(true);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+function handleReference(index, file) {
+  const nextReferences = [...references];
+  nextReferences[index] = file || null;
+
+  setReferences(nextReferences);
+  setError("");
+
+  const operationId = ++referenceSaveSequence.current;
+
+  setReferenceStorageStatus("saving");
+
+  const operation = file
+    ? saveReferenceToStorage(index, file)
+    : deleteReferenceFromStorage(index);
+
+  operation
+    .then(() => {
+      if (operationId !== referenceSaveSequence.current) return;
+
+      setReferenceStorageStatus(
+        nextReferences.some(Boolean) ? "saved" : "ready"
+      );
+    })
+    .catch((err) => {
+      console.warn("Reference storage failed:", err);
+
+      if (operationId !== referenceSaveSequence.current) return;
+
+      setReferenceStorageStatus("unavailable");
+    });
+}
 
   function resetStudio() {
     if (busy) return;
@@ -98,6 +358,21 @@ const [exportProgress, setExportProgress] = useState("");
     setDuration("30 Sec");
     setPrompt("");
     setReferences([null, null, null, null]);
+    const resetOperationId = ++referenceSaveSequence.current;
+
+setReferenceStorageStatus("saving");
+
+clearSavedReferences()
+  .then(() => {
+    if (resetOperationId !== referenceSaveSequence.current) return;
+    setReferenceStorageStatus("ready");
+  })
+  .catch((err) => {
+    console.warn("Could not clear saved references:", err);
+
+    if (resetOperationId !== referenceSaveSequence.current) return;
+    setReferenceStorageStatus("unavailable");
+  });
     setStoryboard(null);
     setGeneratedImages([]);
     setSelectedScene(0);
@@ -550,36 +825,39 @@ const [exportProgress, setExportProgress] = useState("");
                   of new images.
                 </p>
 
-                <div className="reference-grid">
-                  {references.map((file, index) => (
-                    <label className="reference-slot" key={index}>
-                      {file ? (
-                        <img
-                          src={URL.createObjectURL(file)}
-                          alt={`Reference ${index + 1}`}
-                        />
-                      ) : (
-                        <>
-                          <ImagePlus size={21} />
-                          <span>Reference {index + 1}</span>
-                        </>
-                      )}
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        disabled={busy}
-                        onChange={(event) => {
-                          handleReference(
-                            index,
-                            event.target.files?.[0]
-                          );
-                          event.target.value = "";
-                        }}
-                      />
-                    </label>
-                  ))}
-                </div>
-              </div>
+                <p className="field-help">
+  ...
+</p>
+
+<div className="reference-grid">
+  {references.map((file, index) => (
+    <label className="reference-slot" key={index}>
+      {file ? (
+        <img
+          src={URL.createObjectURL(file)}
+          alt={`Reference ${index + 1}`}
+        />
+      ) : (
+        <>
+          <ImagePlus size={21} />
+          <span>Reference {index + 1}</span>
+        </>
+      )}
+      <input
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        disabled={busy || !referencesReady}
+        onChange={(event) => {
+          handleReference(
+            index,
+            event.target.files?.[0]
+          );
+          event.target.value = "";
+        }}
+      />
+    </label>
+  ))}
+</div>
 
               {error && (
                 <div
@@ -601,28 +879,32 @@ const [exportProgress, setExportProgress] = useState("");
               )}
 
               <div className="action-buttons">
-                <button
-                  className="primary-button"
-                  disabled={busy || backendStatus !== "online"}
-                  onClick={handleAutoEdit}
-                >
-                  {busy ? (
-                    <LoaderCircle size={17} />
-                  ) : (
-                    <Sparkles size={17} />
-                  )}
-                  {busy ? "Creating..." : "Auto Edit"}
-                </button>
+  <button
+    className="primary-button"
+    disabled={
+      busy ||
+      backendStatus !== "online" ||
+      !referencesReady
+    }
+    onClick={handleAutoEdit}
+  >
+    {busy ? (
+      <LoaderCircle size={17} />
+    ) : (
+      <Sparkles size={17} />
+    )}
+    {busy ? "Creating..." : "Auto Edit"}
+  </button>
 
-                <button
-                  className="secondary-button"
-                  disabled={busy || backendStatus !== "online"}
-                  onClick={handleAutoDraft}
-                >
-                  <Film size={17} />
-                  Auto Draft
-                </button>
-              </div>
+  <button
+    className="secondary-button"
+    disabled={busy || backendStatus !== "online"}
+    onClick={handleAutoDraft}
+  >
+    <Film size={17} />
+    Auto Draft
+  </button>
+</div>
               <button
   className="primary-button"
   style={{ width: "100%", marginTop: 14 }}
@@ -656,13 +938,13 @@ const [exportProgress, setExportProgress] = useState("");
 )}
 
               <button
-                className="reset-button"
-                onClick={resetStudio}
-                disabled={busy || exportBusy}
-              >
-                <RotateCcw size={15} />
-                Reset Settings
-              </button>
+  className="reset-button"
+  onClick={resetStudio}
+  disabled={busy || exportBusy || !referencesReady}
+>
+  <RotateCcw size={15} />
+  Reset Settings
+</button>
 
               {storyboard && (
                 <div style={{ marginTop: 18, fontSize: 12 }}>
