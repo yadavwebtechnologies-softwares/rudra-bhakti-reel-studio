@@ -22,17 +22,21 @@ import {
   checkBackend,
   planStory,
   generateSceneImage,
+  generateMasterBackground,
+  createStyleBoard,
   fileToDataUrl,
 } from "./api.js";
+
 import { exportSilentReel } from "./videoExport.js";
 
 const styles = ["Devotional", "Serene", "Energetic", "Minimal"];
 const durations = ["15 Sec", "30 Sec", "60 Sec"];
 
 function getSceneCount(duration) {
-  if (duration === "15 Sec") return 3;
-  if (duration === "60 Sec") return 8;
-  return 5;
+  if (duration === "15 Sec") return 5;
+  if (duration === "30 Sec") return 10;
+  if (duration === "60 Sec") return 20;
+  return 10;
 }
 
 // Persistent reference image storage
@@ -290,6 +294,9 @@ export default function App() {
   const [generatedImages, setGeneratedImages] = useState([]);
   const [selectedScene, setSelectedScene] = useState(0);
 
+  // The same master background is reused throughout one Reel.
+  const [masterBackground, setMasterBackground] = useState(null);
+
   const [status, setStatus] = useState(
     "Checking backend connection..."
   );
@@ -415,6 +422,7 @@ export default function App() {
     setDuration("30 Sec");
     setPrompt("");
     setReferences([null, null, null, null]);
+    setMasterBackground(null);
 
     const resetOperationId =
       ++referenceSaveSequence.current;
@@ -454,6 +462,7 @@ export default function App() {
     setStatus("Ready to create");
   }
 
+  // Plan the complete story before generating any images.
   async function createStoryboard() {
     const story = prompt.trim();
 
@@ -465,12 +474,38 @@ export default function App() {
 
     const sceneCount = getSceneCount(duration);
 
-    setStatus("AI is planning your story...");
-    setProgress("Creating your storyboard...");
+    setStatus("AI is planning your complete story...");
+    setProgress(
+      `Planning ${sceneCount} sequential scenes with a 3-second base duration...`
+    );
     setError("");
 
     const result = await planStory(
-      `${story}\n\nVisual mood: ${style}. Keep the same characters, faces, clothing and identity throughout all scenes.`,
+      `${story}
+
+Visual mood: ${style}.
+
+ADVANCED SCENE DIRECTOR:
+Plan the complete visual sequence before image generation.
+Understand the full story, characters, events, emotions and chronological progression.
+
+For every scene, select its own story-specific:
+- Purpose and narrative moment.
+- Character action and natural body pose.
+- Hand gestures and facial expression.
+- Gaze direction and interaction.
+- Camera angle, framing and composition.
+- Visual difference from the previous scene.
+- Continuity with established character identities.
+
+Avoid repeating the same pose, action, expression or camera composition unnecessarily.
+
+Keep the same characters, faces, clothing, jewellery and identities throughout.
+
+Use a clean plain studio-gradient background. No landscape, temple, mountain, forest or outdoor environment.
+
+Every scene is designed for a 3-second visual moment.
+No narration, voiceover, music or written text.`,
       sceneCount
     );
 
@@ -478,9 +513,16 @@ export default function App() {
       throw new Error("AI did not return any scenes.");
     }
 
+    if (result.scenes.length !== sceneCount) {
+      throw new Error(
+        `AI returned ${result.scenes.length} scenes instead of ${sceneCount}. Please try again.`
+      );
+    }
+
     setStoryboard(result);
     setGeneratedImages([]);
     setSelectedScene(0);
+    setMasterBackground(null);
 
     setStatus(
       `${result.scenes.length} scenes planned successfully`
@@ -511,6 +553,8 @@ export default function App() {
     }
   }
 
+  // Generate one master background, then create all scenes
+  // using that background and the preceding generated scene.
   async function handleAutoEdit() {
     if (busy || !referencesReady) return;
 
@@ -524,12 +568,15 @@ export default function App() {
     setBusy(true);
     setError("");
     setGeneratedImages([]);
+    setMasterBackground(null);
 
     try {
+      // Step 1: Plan the entire story.
       const plan = await createStoryboard();
 
-      setStatus("Preparing reference images...");
-      setProgress("Reading your active style references...");
+      // Step 2: Prepare all active style references.
+      setStatus("Preparing visual style references...");
+      setProgress("Reading your four active reference slots...");
 
       const activeReferences = await Promise.all(
         references
@@ -537,7 +584,42 @@ export default function App() {
           .map((file) => fileToDataUrl(file))
       );
 
+      // Step 3: Combine the references into one style board.
+      setStatus("Creating the master style board...");
+      setProgress(
+        "Combining active references into a unified visual style..."
+      );
+
+      const styleBoard = await createStyleBoard(
+        activeReferences
+      );
+
+      // Step 4: Generate one reusable master background.
+      setStatus("Generating the master studio background...");
+      setProgress(
+        "Establishing the fixed studio-gradient background for this Reel..."
+      );
+
+      const backgroundResult = await generateMasterBackground({
+        styleBoard,
+      });
+
+      const backgroundImage =
+        backgroundResult.masterBackgroundDataUrl;
+
+      if (!backgroundImage) {
+        throw new Error(
+          "Master background generation returned no image."
+        );
+      }
+
+      setMasterBackground(backgroundImage);
+
+      // Step 5: Generate scenes in chronological order.
+      // Each new scene receives the same background and
+      // the previous completed scene as continuity references.
       const results = [];
+      let previousScene = null;
 
       for (let i = 0; i < plan.scenes.length; i++) {
         const scene = plan.scenes[i];
@@ -547,13 +629,33 @@ export default function App() {
         );
 
         setProgress(
-          `Creating image ${i + 1}/${plan.scenes.length}: ${scene.sceneTitle}`
+          i === 0
+            ? `Creating first scene: ${scene.sceneTitle}`
+            : `Creating scene ${i + 1}/${plan.scenes.length} with previous-scene continuity...`
         );
 
         const result = await generateSceneImage({
-          scenePrompt: `${scene.imagePrompt}\n\nVisual mood: ${style}.`,
+          scenePrompt: `${scene.imagePrompt}
+
+Visual mood: ${style}.
+
+SCENE DURATION: 3 seconds.
+
+MASTER BACKGROUND LOCK:
+Use the supplied master studio background as the exact fixed background.
+Do not invent another location, environment or background.
+
+STORY CONTINUITY:
+Follow the supplied previous scene for character identity and visual continuity.
+Change the pose, action, facial expression, gaze and composition according to this scene's unique story purpose.
+Do not blindly copy the previous scene's pose or composition.
+
+Maintain the same character faces, clothing, colours and jewellery.`,
           characterBible: plan.characterBible,
           references: activeReferences,
+          styleBoard,
+          masterBackground: backgroundImage,
+          previousScene,
         });
 
         if (!result.imageDataUrl) {
@@ -562,10 +664,15 @@ export default function App() {
           );
         }
 
-        results.push({
+        const completedScene = {
           ...scene,
           imageDataUrl: result.imageDataUrl,
-        });
+        };
+
+        results.push(completedScene);
+
+        // The next scene receives this completed scene.
+        previousScene = result.imageDataUrl;
 
         setGeneratedImages([...results]);
         setSelectedScene(0);
@@ -712,7 +819,7 @@ export default function App() {
           </div>
 
           <div className="version-tag">
-            BETA · VERSION 1.0
+            BETA · VERSION 2.0
           </div>
         </section>
 
@@ -796,6 +903,30 @@ export default function App() {
                   Silent export · Add Facebook music later
                 </div>
               </div>
+
+              {masterBackground && (
+                <div style={{ marginTop: 16 }}>
+                  <h3 style={{ fontSize: 13, marginBottom: 8 }}>
+                    Active Master Background
+                  </h3>
+
+                  <img
+                    src={masterBackground}
+                    alt="Master studio-gradient background"
+                    style={{
+                      width: 90,
+                      aspectRatio: "9 / 16",
+                      objectFit: "cover",
+                      borderRadius: 8,
+                      border: "1px solid #ddd",
+                    }}
+                  />
+
+                  <p className="field-help">
+                    This background is reused for all scenes in this Reel.
+                  </p>
+                </div>
+              )}
 
               {generatedImages.length > 0 && (
                 <div style={{ marginTop: 20 }}>
@@ -951,8 +1082,8 @@ export default function App() {
                 </div>
 
                 <p className="field-help">
-                  {getSceneCount(duration)} visual scenes will be
-                  planned.
+                  {getSceneCount(duration)} visual scenes · 3 seconds
+                  base duration per scene.
                 </p>
               </div>
 
@@ -970,8 +1101,8 @@ export default function App() {
                 />
 
                 <p className="field-help">
-                  AI will divide your story into different moments.
-                  No narration or voiceover will be generated.
+                  AI plans the complete story before generating
+                  images. No narration or voiceover will be generated.
                 </p>
               </div>
 
@@ -982,9 +1113,9 @@ export default function App() {
                 </div>
 
                 <p className="field-help">
-                  Upload or replace references anytime. Active
-                  references guide the visual style, lighting,
-                  colours and quality of new images.
+                  Upload or replace references anytime. All active
+                  references collectively guide visual style,
+                  lighting, colours, textures and quality.
                 </p>
 
                 <p
