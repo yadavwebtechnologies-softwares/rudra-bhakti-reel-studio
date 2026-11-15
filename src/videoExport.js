@@ -7,6 +7,10 @@ const VIDEO_HEIGHT = 1920;
 const FPS = 30;
 const OUTPUT_FILE = "rudra-bhakti-final.mp4";
 
+// Every scene gets exactly 3 seconds before transition overlap.
+const SCENE_DURATION = 3;
+const TRANSITION_DURATION = 0.2;
+
 let ffmpegInstance = null;
 let ffmpegLoading = null;
 let exportInProgress = false;
@@ -58,10 +62,13 @@ function seededIndex(seed, index, length) {
 
 function keyframeExpression(values, frameCount) {
   if (!Array.isArray(values) || values.length !== 5) {
-    throw new Error("Each camera move must contain exactly five keyframes.");
+    throw new Error(
+      "Each camera move must contain exactly five keyframes."
+    );
   }
 
   const lastFrame = Math.max(4, frameCount - 1);
+
   const frames = values.map((_, index) =>
     Math.round((lastFrame * index) / 4)
   );
@@ -73,7 +80,6 @@ function keyframeExpression(values, frameCount) {
     const endFrame = frames[i + 1];
     const frameLength = Math.max(1, endFrame - startFrame);
 
-    // Cosine easing creates a gentle ease-in/ease-out between keyframes.
     const segment =
       `${values[i]}+(${values[i + 1]}-${values[i]})*` +
       `(0.5-0.5*cos(PI*(on-${startFrame})/${frameLength}))`;
@@ -90,56 +96,67 @@ const MOTION_LIBRARY = {
     panX: [0.5, 0.5, 0.5, 0.5, 0.5],
     panY: [0.5, 0.5, 0.5, 0.5, 0.5],
   },
+
   gentlePullback: {
     zoom: [1.085, 1.07, 1.05, 1.035, 1.02],
     panX: [0.5, 0.5, 0.49, 0.5, 0.5],
     panY: [0.5, 0.5, 0.5, 0.51, 0.5],
   },
+
   horizontalLeft: {
     zoom: [1.06, 1.065, 1.07, 1.065, 1.06],
     panX: [0.76, 0.63, 0.5, 0.37, 0.24],
     panY: [0.5, 0.5, 0.5, 0.5, 0.5],
   },
+
   horizontalRight: {
     zoom: [1.06, 1.065, 1.07, 1.065, 1.06],
     panX: [0.24, 0.37, 0.5, 0.63, 0.76],
     panY: [0.5, 0.5, 0.5, 0.5, 0.5],
   },
+
   verticalRise: {
     zoom: [1.045, 1.055, 1.065, 1.075, 1.085],
     panX: [0.5, 0.5, 0.5, 0.5, 0.5],
     panY: [0.74, 0.62, 0.5, 0.38, 0.26],
   },
+
   verticalFall: {
     zoom: [1.08, 1.07, 1.06, 1.05, 1.04],
     panX: [0.5, 0.5, 0.5, 0.5, 0.5],
     panY: [0.26, 0.38, 0.5, 0.62, 0.74],
   },
+
   diagonalDrift: {
     zoom: [1.04, 1.05, 1.06, 1.07, 1.08],
     panX: [0.28, 0.39, 0.5, 0.61, 0.72],
     panY: [0.72, 0.61, 0.5, 0.39, 0.28],
   },
+
   softReveal: {
     zoom: [1.0, 1.02, 1.045, 1.065, 1.08],
     panX: [0.64, 0.59, 0.53, 0.48, 0.5],
     panY: [0.6, 0.56, 0.51, 0.47, 0.5],
   },
+
   intimateFocus: {
     zoom: [1.07, 1.08, 1.09, 1.09, 1.08],
     panX: [0.5, 0.48, 0.5, 0.52, 0.5],
     panY: [0.5, 0.48, 0.5, 0.52, 0.5],
   },
+
   peacefulHold: {
     zoom: [1.025, 1.03, 1.035, 1.04, 1.04],
     panX: [0.5, 0.5, 0.5, 0.5, 0.5],
     panY: [0.5, 0.5, 0.5, 0.5, 0.5],
   },
+
   slowTiltUp: {
     zoom: [1.035, 1.045, 1.055, 1.065, 1.075],
     panX: [0.5, 0.5, 0.5, 0.5, 0.5],
     panY: [0.66, 0.58, 0.5, 0.42, 0.34],
   },
+
   subtleFloat: {
     zoom: [1.045, 1.05, 1.055, 1.05, 1.045],
     panX: [0.47, 0.49, 0.52, 0.51, 0.48],
@@ -163,34 +180,55 @@ function getSceneMood(scene) {
 
   if (
     /ध्यान|ध्यानमग्न|तपस्या|शांत|शांति|समाधि|प्रार्थना|आराधना|पूजा|meditat|dhyana|peace|serene|calm|prayer|worship/.test(text)
-  ) return "peaceful";
+  ) {
+    return "peaceful";
+  }
 
   if (
     /आलिंगन|गले लग|प्रेम|स्नेह|मिलन|करुणा|वात्सल्य|embrace|love|holding|together|compassion|affection/.test(text)
-  ) return "emotional";
+  ) {
+    return "emotional";
+  }
 
   if (
     /आशीर्वाद|वरदान|कृपा|दिव्य|प्रकट|अवतार|ज्योति|प्रकाश|आभा|दर्शन|blessing|divine|aura|light|darshan|appearance|manifest/.test(text)
-  ) return "divine";
+  ) {
+    return "divine";
+  }
 
   if (
     /निहार|देखते|देखना|दृष्टि|नज़र|नजर|गगन|gaze|glance|look|vision|stargaz|staring/.test(text)
-  ) return "gaze";
+  ) {
+    return "gaze";
+  }
 
   if (
     /चलते|यात्रा|प्रस्थान|आगमन|आगे बढ़|कदम|walk|journey|moving|travel|arrival|departure/.test(text)
-  ) return "movement";
+  ) {
+    return "movement";
+  }
 
   if (
     /अंतिम|समापन|एकता|आनंद|पूर्ण|अंतिम दृश्य|final|togetherness|bliss|ending|reunion/.test(text)
-  ) return "ending";
+  ) {
+    return "ending";
+  }
 
   return "general";
 }
 
-function chooseWithoutImmediateRepeat(candidates, previous, seed, index) {
-  const available = candidates.filter((name) => name !== previous);
+function chooseWithoutImmediateRepeat(
+  candidates,
+  previous,
+  seed,
+  index
+) {
+  const available = candidates.filter(
+    (name) => name !== previous
+  );
+
   const pool = available.length ? available : candidates;
+
   return pool[seededIndex(seed, index, pool.length)];
 }
 
@@ -205,6 +243,7 @@ function getSceneMotion(scene, index, seed, previousMotion) {
       "gentlePullback",
       "slowTiltUp",
     ],
+
     emotional: [
       "gentlePullback",
       "intimateFocus",
@@ -212,6 +251,7 @@ function getSceneMotion(scene, index, seed, previousMotion) {
       "softReveal",
       "subtleFloat",
     ],
+
     divine: [
       "softReveal",
       "cinematicPush",
@@ -219,6 +259,7 @@ function getSceneMotion(scene, index, seed, previousMotion) {
       "gentlePullback",
       "slowTiltUp",
     ],
+
     gaze: [
       "horizontalLeft",
       "horizontalRight",
@@ -226,6 +267,7 @@ function getSceneMotion(scene, index, seed, previousMotion) {
       "softReveal",
       "subtleFloat",
     ],
+
     movement: [
       "diagonalDrift",
       "horizontalLeft",
@@ -233,12 +275,14 @@ function getSceneMotion(scene, index, seed, previousMotion) {
       "verticalRise",
       "verticalFall",
     ],
+
     ending: [
       "gentlePullback",
       "peacefulHold",
       "softReveal",
       "cinematicPush",
     ],
+
     general: Object.keys(MOTION_LIBRARY),
   };
 
@@ -255,16 +299,57 @@ function getSceneMotion(scene, index, seed, previousMotion) {
   };
 }
 
-function getSceneTransition(scene, index, seed, previousTransition) {
+function getSceneTransition(
+  scene,
+  index,
+  seed,
+  previousTransition
+) {
   const mood = getSceneMood(scene);
 
   const transitionSets = {
-    peaceful: ["fade", "dissolve", "fadeblack", "smoothdown"],
-    emotional: ["dissolve", "fade", "smoothright", "smoothleft"],
-    divine: ["circleopen", "dissolve", "fade", "fadewhite"],
-    gaze: ["smoothleft", "smoothright", "wipeleft", "wiperight"],
-    movement: ["slideright", "slideleft", "smoothleft", "wiperight"],
-    ending: ["fadeblack", "fade", "dissolve", "circleclose"],
+    peaceful: [
+      "fade",
+      "dissolve",
+      "fadeblack",
+      "smoothdown",
+    ],
+
+    emotional: [
+      "dissolve",
+      "fade",
+      "smoothright",
+      "smoothleft",
+    ],
+
+    divine: [
+      "circleopen",
+      "dissolve",
+      "fade",
+      "fadewhite",
+    ],
+
+    gaze: [
+      "smoothleft",
+      "smoothright",
+      "wipeleft",
+      "wiperight",
+    ],
+
+    movement: [
+      "slideright",
+      "slideleft",
+      "smoothleft",
+      "wiperight",
+    ],
+
+    ending: [
+      "fadeblack",
+      "fade",
+      "dissolve",
+      "circleclose",
+    ],
+
     general: [
       "dissolve",
       "smoothleft",
@@ -297,30 +382,47 @@ export async function exportSilentReel({
   onProgress,
 }) {
   if (exportInProgress) {
-    throw new Error("A Reel export is already running. Please wait for it to finish.");
+    throw new Error(
+      "A Reel export is already running. Please wait for it to finish."
+    );
   }
 
   if (!Array.isArray(scenes) || scenes.length === 0) {
-    throw new Error("No generated scenes are available to export.");
+    throw new Error(
+      "No generated scenes are available to export."
+    );
   }
 
   if (scenes.some((scene) => !scene?.imageDataUrl)) {
-    throw new Error("One or more scene images are missing.");
+    throw new Error(
+      "One or more scene images are missing."
+    );
   }
 
-  const parsedDuration = Number.parseFloat(duration);
-  const totalSeconds = Number.isFinite(parsedDuration) && parsedDuration > 0
-    ? Math.min(180, Math.max(5, parsedDuration))
-    : 30;
-
+  // Each scene receives exactly 3 seconds of source footage.
+  // Transitions overlap by 0.2 seconds between adjacent scenes.
   const sceneCount = scenes.length;
-  const transitionDuration = Math.min(0.8, Math.max(0.45, totalSeconds / sceneCount * 0.18));
-  const clipDuration =
-    (totalSeconds + transitionDuration * (sceneCount - 1)) / sceneCount;
-  const frameCount = Math.max(2, Math.ceil(clipDuration * FPS));
 
-  // Each export gets a new motion/transition arrangement.
-  const reelSeed = Math.floor(Math.random() * 0x7fffffff);
+  const clipDuration = SCENE_DURATION;
+
+  const transitionDuration =
+    sceneCount > 1 ? TRANSITION_DURATION : 0;
+
+  // Calculate the actual final video length after transition overlaps.
+  const totalSeconds =
+    clipDuration * sceneCount -
+    transitionDuration * (sceneCount - 1);
+
+  const frameCount = Math.max(
+    2,
+    Math.ceil(clipDuration * FPS)
+  );
+
+  // Every export gets a new motion and transition arrangement.
+  const reelSeed = Math.floor(
+    Math.random() * 0x7fffffff
+  );
+
   const filesToClean = [];
   let ffmpeg = null;
 
@@ -328,33 +430,48 @@ export async function exportSilentReel({
 
   try {
     ffmpeg = await getFFmpeg(onProgress);
-    onProgress?.("Preparing portrait scenes and cinematic camera moves...");
+
+    onProgress?.(
+      "Preparing portrait scenes and cinematic camera moves..."
+    );
 
     const command = ["-filter_complex_threads", "1"];
 
+    // Load each scene as a 3-second video input.
     for (let i = 0; i < sceneCount; i++) {
       const fileName = `rudra-scene-${i}.png`;
-      const imageBytes = await fetchFile(scenes[i].imageDataUrl);
+
+      const imageBytes = await fetchFile(
+        scenes[i].imageDataUrl
+      );
 
       if (!imageBytes || imageBytes.length === 0) {
-        throw new Error(`Scene ${i + 1} image could not be read.`);
+        throw new Error(
+          `Scene ${i + 1} image could not be read.`
+        );
       }
 
       await ffmpeg.writeFile(fileName, imageBytes);
       filesToClean.push(fileName);
 
       command.push(
-        "-loop", "1",
-        "-framerate", String(FPS),
-        "-t", formatSeconds(clipDuration),
-        "-i", fileName
+        "-loop",
+        "1",
+        "-framerate",
+        String(FPS),
+        "-t",
+        formatSeconds(clipDuration),
+        "-i",
+        fileName
       );
     }
 
     const filters = [];
+
     let previousMotion = null;
     let previousTransition = null;
 
+    // Generate independent cinematic camera movement for each scene.
     for (let i = 0; i < sceneCount; i++) {
       const motion = getSceneMotion(
         scenes[i],
@@ -362,11 +479,23 @@ export async function exportSilentReel({
         reelSeed,
         previousMotion
       );
+
       previousMotion = motion.name;
 
-      const zoom = keyframeExpression(motion.zoom, frameCount);
-      const panX = keyframeExpression(motion.panX, frameCount);
-      const panY = keyframeExpression(motion.panY, frameCount);
+      const zoom = keyframeExpression(
+        motion.zoom,
+        frameCount
+      );
+
+      const panX = keyframeExpression(
+        motion.panX,
+        frameCount
+      );
+
+      const panY = keyframeExpression(
+        motion.panY,
+        frameCount
+      );
 
       filters.push(
         `[${i}:v]` +
@@ -384,24 +513,28 @@ export async function exportSilentReel({
           `setsar=1,` +
           `format=yuv420p,` +
           `settb=AVTB,` +
-`fps=${FPS}[v${i}]`
+          `fps=${FPS}[v${i}]`
       );
     }
 
+    // Join scenes with varied transitions matched to each scene's mood.
     let lastOutput = "v0";
     let accumulatedDuration = clipDuration;
 
     for (let i = 1; i < sceneCount; i++) {
       const outputName = `transition${i}`;
+
       const transition = getSceneTransition(
         scenes[i],
         i,
         reelSeed,
         previousTransition
       );
+
       previousTransition = transition;
 
-      const offset = accumulatedDuration - transitionDuration;
+      const offset =
+        accumulatedDuration - transitionDuration;
 
       filters.push(
         `[${lastOutput}][v${i}]xfade=` +
@@ -411,13 +544,26 @@ export async function exportSilentReel({
       );
 
       lastOutput = outputName;
-      accumulatedDuration += clipDuration - transitionDuration;
+
+      accumulatedDuration +=
+        clipDuration - transitionDuration;
     }
 
-    // Gentle opening and closing fades make the finished reel feel intentional.
-    const fadeInDuration = Math.min(0.35, totalSeconds * 0.04);
-    const fadeOutDuration = Math.min(0.45, totalSeconds * 0.05);
-    const fadeOutStart = Math.max(0, totalSeconds - fadeOutDuration);
+    // Gentle opening and closing fades.
+    const fadeInDuration = Math.min(
+      0.35,
+      totalSeconds * 0.04
+    );
+
+    const fadeOutDuration = Math.min(
+      0.45,
+      totalSeconds * 0.05
+    );
+
+    const fadeOutStart = Math.max(
+      0,
+      totalSeconds - fadeOutDuration
+    );
 
     filters.push(
       `[${lastOutput}]` +
@@ -456,24 +602,37 @@ export async function exportSilentReel({
     );
 
     onProgress?.(
-      "Rendering 5-keyframe camera animation, scene-matched transitions and cinematic finishing..."
+      "Rendering 3-second scenes with 5-keyframe camera animations, varied transitions and cinematic finishing..."
     );
 
     const exitCode = await ffmpeg.exec(command);
+
     if (exitCode !== 0) {
-      throw new Error(`Video rendering failed (FFmpeg exit code ${exitCode}). Please retry the export.`);
+      throw new Error(
+        `Video rendering failed (FFmpeg exit code ${exitCode}). Please retry the export.`
+      );
     }
 
-    onProgress?.("Finalizing high-quality silent MP4...");
+    onProgress?.(
+      "Finalizing high-quality silent MP4..."
+    );
 
     const data = await ffmpeg.readFile(OUTPUT_FILE);
+
     if (!data || data.length < 1024) {
-      throw new Error("The MP4 export is empty or incomplete. Please retry.");
+      throw new Error(
+        "The MP4 export is empty or incomplete. Please retry."
+      );
     }
 
-    return new Blob([data], { type: "video/mp4" });
+    return new Blob(
+      [data],
+      { type: "video/mp4" }
+    );
   } catch (error) {
-    const message = error?.message || "Unexpected video export error.";
+    const message =
+      error?.message || "Unexpected video export error.";
+
     throw new Error(message);
   } finally {
     if (ffmpeg) {
