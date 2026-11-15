@@ -32,6 +32,10 @@ import { exportSilentReel } from "./videoExport.js";
 const styles = ["Devotional", "Serene", "Energetic", "Minimal"];
 const durations = ["15 Sec", "30 Sec", "60 Sec"];
 
+// Temporary test mode: Auto Edit generates only two scenes.
+const SAMPLE_TEST_MODE = true;
+const SAMPLE_TEST_SCENE_COUNT = 2;
+
 function getSceneCount(duration) {
   if (duration === "15 Sec") return 5;
   if (duration === "30 Sec") return 10;
@@ -294,7 +298,7 @@ export default function App() {
   const [generatedImages, setGeneratedImages] = useState([]);
   const [selectedScene, setSelectedScene] = useState(0);
 
-  // The same master background is reused throughout one Reel.
+  // One reusable studio-gradient background per Reel.
   const [masterBackground, setMasterBackground] = useState(null);
 
   const [status, setStatus] = useState(
@@ -459,11 +463,12 @@ export default function App() {
     setSelectedScene(0);
     setProgress("");
     setError("");
+    setExportProgress("");
     setStatus("Ready to create");
   }
 
-  // Plan the complete story before generating any images.
-  async function createStoryboard() {
+  // Plan the complete story before generating images.
+  async function createStoryboard(sceneCountOverride = null) {
     const story = prompt.trim();
 
     if (story.length < 10) {
@@ -472,12 +477,16 @@ export default function App() {
       );
     }
 
-    const sceneCount = getSceneCount(duration);
+    const sceneCount = Number.isInteger(sceneCountOverride)
+      ? sceneCountOverride
+      : getSceneCount(duration);
 
     setStatus("AI is planning your complete story...");
+
     setProgress(
       `Planning ${sceneCount} sequential scenes with a 3-second base duration...`
     );
+
     setError("");
 
     const result = await planStory(
@@ -540,7 +549,11 @@ No narration, voiceover, music or written text.`,
     setError("");
 
     try {
-      await createStoryboard();
+      await createStoryboard(
+        SAMPLE_TEST_MODE
+          ? SAMPLE_TEST_SCENE_COUNT
+          : null
+      );
     } catch (err) {
       setError(
         err.message || "Could not create the storyboard."
@@ -553,7 +566,7 @@ No narration, voiceover, music or written text.`,
     }
   }
 
-  // Generate one master background, then create all scenes
+  // Generate one master background, then both sample scenes
   // using that background and the preceding generated scene.
   async function handleAutoEdit() {
     if (busy || !referencesReady) return;
@@ -569,14 +582,19 @@ No narration, voiceover, music or written text.`,
     setError("");
     setGeneratedImages([]);
     setMasterBackground(null);
+    setExportProgress("");
 
     try {
-      // Step 1: Plan the entire story.
-      const plan = await createStoryboard();
+      // Step 1: Plan the complete story.
+      const plan = await createStoryboard(
+        SAMPLE_TEST_MODE
+          ? SAMPLE_TEST_SCENE_COUNT
+          : null
+      );
 
-      // Step 2: Prepare all active style references.
+      // Step 2: Prepare active style references.
       setStatus("Preparing visual style references...");
-      setProgress("Reading your four active reference slots...");
+      setProgress("Reading your active style references...");
 
       const activeReferences = await Promise.all(
         references
@@ -597,7 +615,7 @@ No narration, voiceover, music or written text.`,
       // Step 4: Generate one reusable master background.
       setStatus("Generating the master studio background...");
       setProgress(
-        "Establishing the fixed studio-gradient background for this Reel..."
+        "Establishing the fixed studio-gradient background..."
       );
 
       const backgroundResult = await generateMasterBackground({
@@ -616,8 +634,6 @@ No narration, voiceover, music or written text.`,
       setMasterBackground(backgroundImage);
 
       // Step 5: Generate scenes in chronological order.
-      // Each new scene receives the same background and
-      // the previous completed scene as continuity references.
       const results = [];
       let previousScene = null;
 
@@ -642,7 +658,7 @@ Visual mood: ${style}.
 SCENE DURATION: 3 seconds.
 
 MASTER BACKGROUND LOCK:
-Use the supplied master studio background as the exact fixed background.
+Use the supplied master studio background as the fixed background reference.
 Do not invent another location, environment or background.
 
 STORY CONTINUITY:
@@ -667,11 +683,14 @@ Maintain the same character faces, clothing, colours and jewellery.`,
         const completedScene = {
           ...scene,
           imageDataUrl: result.imageDataUrl,
+          eyeCheck: result.eyeCheck || null,
+          eyeCorrectionAttempts:
+            Number(result.eyeCorrectionAttempts) || 0,
         };
 
         results.push(completedScene);
 
-        // The next scene receives this completed scene.
+        // Next scene receives this completed scene.
         previousScene = result.imageDataUrl;
 
         setGeneratedImages([...results]);
@@ -679,11 +698,11 @@ Maintain the same character faces, clothing, colours and jewellery.`,
       }
 
       setStatus(
-        "All scene images generated successfully!"
+        "All sample scene images generated successfully!"
       );
 
       setProgress(
-        `${results.length} of ${results.length} scenes completed`
+        `${results.length} of ${results.length} sample scenes completed`
       );
     } catch (err) {
       setError(err.message || "Image generation failed.");
@@ -712,6 +731,7 @@ Maintain the same character faces, clothing, colours and jewellery.`,
 
   async function handleExportMP4() {
     if (
+      SAMPLE_TEST_MODE ||
       busy ||
       exportBusy ||
       generatedImages.length === 0
@@ -770,6 +790,22 @@ Maintain the same character faces, clothing, colours and jewellery.`,
 
   const currentScene = generatedImages[selectedScene];
 
+  function getEyeStatus(scene) {
+    if (!scene?.eyeCheck) {
+      return "Not available";
+    }
+
+    if (scene.eyeCheck.status === "ok") {
+      return "Passed";
+    }
+
+    if (scene.eyeCheck.status === "problem") {
+      return "Potential issue detected";
+    }
+
+    return "Could not assess";
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -819,7 +855,7 @@ Maintain the same character faces, clothing, colours and jewellery.`,
           </div>
 
           <div className="version-tag">
-            BETA · VERSION 2.0
+            BETA · 2-SCENE TEST
           </div>
         </section>
 
@@ -871,7 +907,7 @@ Maintain the same character faces, clothing, colours and jewellery.`,
 
                       <p>
                         {busy
-                          ? "Your scene is being created..."
+                          ? "Your sample scenes are being created..."
                           : "Your generated devotional images will appear here."}
                       </p>
 
@@ -895,7 +931,9 @@ Maintain the same character faces, clothing, colours and jewellery.`,
               <div className="preview-info">
                 <div>
                   <Clock3 size={15} />
-                  {duration}
+                  {SAMPLE_TEST_MODE
+                    ? "2-scene sample test"
+                    : duration}
                 </div>
 
                 <div>
@@ -923,7 +961,7 @@ Maintain the same character faces, clothing, colours and jewellery.`,
                   />
 
                   <p className="field-help">
-                    This background is reused for all scenes in this Reel.
+                    The same master background is supplied to both sample scenes.
                   </p>
                 </div>
               )}
@@ -936,7 +974,7 @@ Maintain the same character faces, clothing, colours and jewellery.`,
                       marginBottom: 12,
                     }}
                   >
-                    Generated Scenes
+                    Generated Sample Scenes
                   </h3>
 
                   <div
@@ -997,6 +1035,31 @@ Maintain the same character faces, clothing, colours and jewellery.`,
                         {currentScene.sceneDescription}
                       </p>
 
+                      <div
+                        style={{
+                          marginTop: 10,
+                          padding: 10,
+                          borderRadius: 8,
+                          background: "#f7f6fb",
+                          fontSize: 12,
+                          lineHeight: 1.6,
+                        }}
+                      >
+                        <strong>Eye alignment check:</strong>{" "}
+                        {getEyeStatus(currentScene)}
+
+                        {currentScene.eyeCheck?.reason && (
+                          <p style={{ marginTop: 4 }}>
+                            {currentScene.eyeCheck.reason}
+                          </p>
+                        )}
+
+                        <p style={{ marginTop: 4 }}>
+                          Correction attempts:{" "}
+                          {currentScene.eyeCorrectionAttempts || 0}
+                        </p>
+                      </div>
+
                       <button
                         className="secondary-button"
                         onClick={() =>
@@ -1044,6 +1107,26 @@ Maintain the same character faces, clothing, colours and jewellery.`,
                 <WandSparkles size={20} />
               </div>
 
+              {SAMPLE_TEST_MODE && (
+                <div
+                  style={{
+                    padding: 12,
+                    marginBottom: 16,
+                    borderRadius: 8,
+                    background: "#f3f0ff",
+                    color: "#51408c",
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <strong>Sample testing mode is active.</strong>
+                  <p style={{ marginTop: 4 }}>
+                    Auto Edit will generate only 2 scenes.
+                    MP4 export is disabled during this test.
+                  </p>
+                </div>
+              )}
+
               <div className="control-group">
                 <label>VISUAL MOOD</label>
 
@@ -1082,8 +1165,9 @@ Maintain the same character faces, clothing, colours and jewellery.`,
                 </div>
 
                 <p className="field-help">
-                  {getSceneCount(duration)} visual scenes · 3 seconds
-                  base duration per scene.
+                  {SAMPLE_TEST_MODE
+                    ? "2 sample scenes · 3 seconds base duration per scene."
+                    : `${getSceneCount(duration)} visual scenes · 3 seconds base duration per scene.`}
                 </p>
               </div>
 
@@ -1230,9 +1314,15 @@ Maintain the same character faces, clothing, colours and jewellery.`,
                 }}
                 onClick={handleExportMP4}
                 disabled={
+                  SAMPLE_TEST_MODE ||
                   busy ||
                   exportBusy ||
                   generatedImages.length === 0
+                }
+                title={
+                  SAMPLE_TEST_MODE
+                    ? "MP4 export is disabled during sample testing."
+                    : "Export MP4"
                 }
               >
                 {exportBusy ? (
@@ -1241,9 +1331,11 @@ Maintain the same character faces, clothing, colours and jewellery.`,
                   <Download size={17} />
                 )}
 
-                {exportBusy
-                  ? "Exporting MP4..."
-                  : "Export MP4"}
+                {SAMPLE_TEST_MODE
+                  ? "MP4 Export Disabled During Test"
+                  : exportBusy
+                    ? "Exporting MP4..."
+                    : "Export MP4"}
               </button>
 
               {exportProgress && (
