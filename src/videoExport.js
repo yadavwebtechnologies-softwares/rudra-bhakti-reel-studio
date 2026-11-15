@@ -73,10 +73,28 @@ function keyframeExpression(values, frameCount) {
     const endFrame = frames[i + 1];
     const frameLength = Math.max(1, endFrame - startFrame);
 
-    // Cosine easing creates a gentle ease-in/ease-out between keyframes.
+    const previous =
+      i === 0
+        ? 2 * values[i] - values[i + 1]
+        : values[i - 1];
+
+    const next =
+      i + 2 >= values.length
+        ? 2 * values[i + 1] - values[i]
+        : values[i + 2];
+
+    const tangentStart = (values[i + 1] - previous) / 2;
+    const tangentEnd = (next - values[i]) / 2;
+
+    const t = `((on-${startFrame})/${frameLength})`;
+    const t2 = `(${t}*${t})`;
+    const t3 = `(${t2}*${t})`;
+
     const segment =
-      `${values[i]}+(${values[i + 1]}-${values[i]})*` +
-      `(0.5-0.5*cos(PI*(on-${startFrame})/${frameLength}))`;
+      `(2*${t3}-3*${t2}+1)*${values[i]}+` +
+      `(${t3}-2*${t2}+${t})*${tangentStart}+` +
+      `(-2*${t3}+3*${t2})*${values[i + 1]}+` +
+      `(${t3}-${t2})*${tangentEnd}`;
 
     expression = `if(lte(on,${endFrame}),${segment},${expression})`;
   }
